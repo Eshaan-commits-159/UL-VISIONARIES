@@ -23,11 +23,12 @@ ALLOWED_EXT = ".json"
 class BankTransferSystem:
     def __init__(self):
         self.accounts = {
-            "alice": {"balance": 1000.0, "pin": "1234"},
-            "bob": {"balance": 500.0, "pin": "5678"},
-            "charlie": {"balance": 2000.0, "pin": "9999"},
-            "admin": {"balance": 1000000.0, "pin": "0000"}
-        }
+    "alice": {"balance": 1000.0, "pin": self.hash_pin("1234")},
+    "bob": {"balance": 500.0, "pin": self.hash_pin("5678")},
+    "charlie": {"balance": 2000.0, "pin": self.hash_pin("9999")},
+    "admin": {"balance": 1000000.0, "pin": self.hash_pin("0000")},
+}
+
         self.logged_in_user = None
         self.session_token = None
         self.transaction_log = []
