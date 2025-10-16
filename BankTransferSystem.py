@@ -75,9 +75,9 @@ class BankTransferSystem:
     def get_balance(self, username):
         if not self.check_session():
             return "Please log in first"
-        if self.logged_in_user !=username and self.logged_in_user != "admin:
-            return "Access denied
-        return self.accounts[username]["balance]
+        if self.logged_in_user !=username and self.logged_in_user != "admin":
+            return "Access denied"
+        return self.accounts[username]["balance"]
         
 
     def save_state(self, filename):
@@ -97,12 +97,15 @@ class BankTransferSystem:
         except FileNotFoundError:
             pass
 
-    def admin_command(self, command):
-        if self.logged_in_user == "admin":
-            result = subprocess.run(command, capture_output=True, text=True)
-            return result.stdout + result.stderr
+   def admin_command(self, command):
+       allowed_cmds = ["ls", "whoami", "date"]  # only safe commands
+       if self.logged_in_user == "admin":
+           cmd_name = command.strip().split()[0]
+           if cmd_name not in allowed_cmds:
+               return "❌ Command not allowed"
+            result = subprocess.run(command.strip().split(), capture_output=True, text=True)
+           return result.stdout + result.stderr
         return "Access denied"
-
 def main():
     print("=" * 50)
     print("🏦 BANK TRANSFER SYSTEM v2.1 🏦")
@@ -203,4 +206,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
