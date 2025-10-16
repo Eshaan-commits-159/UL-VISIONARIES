@@ -16,6 +16,9 @@ import random
 import secrets
 from datetime import datetime
 
+DATA_DIR = "data"  # all saves/loads confined here
+ALLOWED_EXT = ".json"
+
 
 class BankTransferSystem:
     def __init__(self):
@@ -35,29 +38,42 @@ class BankTransferSystem:
     def authenticate(self, username, pin):
         if username in self.accounts:
             stored_pin = self.accounts[username]["pin"]
+            # use hashed comparison (still simple, minimal change)
             if self.hash_pin(pin) == self.hash_pin(stored_pin):
-                time.sleep(0.1)
+                # small constant sleep for processing simulation (avoid timing leaks)
+                time.sleep(0.05)
                 self.logged_in_user = username
                 self.session_token = secrets.token_hex(16)
                 return True
             else:
                 time.sleep(0.05)
                 return False
+        # unknown user: do a small constant sleep to avoid easy enumeration by timing
+        time.sleep(0.05)
         return False
 
     def check_session(self):
-        return self.logged_in_user is not None
+        return self.logged_in_user is not None and self.session_token is not None
 
     def transfer_money(self, from_account, to_account, amount, auth_token=None):
+        # require active session and that caller matches from_account
         if not self.check_session() or self.logged_in_user != from_account:
             return False, "Unauthorized action"
+
+        # require valid auth token matching session
+        if auth_token is None or auth_token != self.session_token:
+            return False, "Invalid auth token"
+
         if from_account not in self.accounts or to_account not in self.accounts:
             return False, "Invalid account"
-        if amount<=0:
-            return False,"Invalid Transfer Amount"
+
+        # prevent negative or zero transfers
+        if amount <= 0:
+            return False, "Invalid Transfer Amount"
 
         if self.accounts[from_account]["balance"] >= amount:
-            time.sleep(0.1)
+            # small constant sleep for processing simulation
+            time.sleep(0.05)
             self.accounts[from_account]["balance"] -= amount
             self.accounts[to_account]["balance"] += amount
 
@@ -75,37 +91,95 @@ class BankTransferSystem:
     def get_balance(self, username):
         if not self.check_session():
             return "Please log in first"
-        if self.logged_in_user !=username and self.logged_in_user != "admin":
+        if self.logged_in_user != username and self.logged_in_user != "admin":
             return "Access denied"
         return self.accounts[username]["balance"]
-        
+
+    # --- safer save/load (minimal changes) ---
+    def _sanitize_filename(self, filename):
+        if not filename or filename.strip() == "":
+            raise ValueError("Empty filename")
+        # disallow path separators and parent refs
+        if os.path.sep in filename or (os.path.altsep and os.path.altsep in filename):
+            raise ValueError("Invalid filename (contains path separators)")
+        if ".." in filename:
+            raise ValueError("Invalid filename")
+        base, ext = os.path.splitext(filename)
+        if ext.lower() != ALLOWED_EXT:
+            raise ValueError(f"Only {ALLOWED_EXT} files allowed")
+        # return a safe basename
+        return os.path.basename(base + ext)
+
+    def _ensure_data_dir(self):
+        os.makedirs(DATA_DIR, exist_ok=True)
 
     def save_state(self, filename):
+        try:
+            safe_name = self._sanitize_filename(filename)
+        except ValueError as e:
+            return False, f"Invalid filename: {e}"
+
+        self._ensure_data_dir()
+        path = os.path.abspath(os.path.join(DATA_DIR, safe_name))
+        data_dir_abs = os.path.abspath(DATA_DIR) + os.path.sep
+        if not path.startswith(data_dir_abs):
+            return False, "Invalid path"
+
         data = {
             "accounts": self.accounts,
             "transactions": self.transaction_log
         }
-        with open(filename, 'w') as f:
-            json.dump(data, f)
+        try:
+            with open(path, 'w') as f:
+                json.dump(data, f)
+            return True, f"State saved to {path}"
+        except Exception as e:
+            return False, f"Save failed: {e}"
 
     def load_state(self, filename):
         try:
-            with open(filename, 'r') as f:
+            safe_name = self._sanitize_filename(filename)
+        except ValueError as e:
+            return False, f"Invalid filename: {e}"
+
+        self._ensure_data_dir()
+        path = os.path.abspath(os.path.join(DATA_DIR, safe_name))
+        data_dir_abs = os.path.abspath(DATA_DIR) + os.path.sep
+        if not path.startswith(data_dir_abs):
+            return False, "Invalid path"
+
+        try:
+            with open(path, 'r') as f:
                 data = json.load(f)
+                # minimal normalization: ensure transactions exist
                 self.accounts = data.get("accounts", self.accounts)
                 self.transaction_log = data.get("transactions", [])
+            return True, f"State loaded from {path}"
         except FileNotFoundError:
-            pass
+            return False, "File not found"
+        except json.JSONDecodeError:
+            return False, "Invalid JSON file"
+        except Exception as e:
+            return False, f"Load failed: {e}"
 
-   def admin_command(self, command):
-       allowed_cmds = ["ls", "whoami", "date"]  # only safe commands
-       if self.logged_in_user == "admin":
-           cmd_name = command.strip().split()[0]
-           if cmd_name not in allowed_cmds:
-               return "❌ Command not allowed"
-            result = subprocess.run(command.strip().split(), capture_output=True, text=True)
-           return result.stdout + result.stderr
+    # --- safer admin_command (minimal) ---
+    def admin_command(self, command):
+        # small whitelist of allowed admin commands (first token)
+        allowed_cmds = ["ls", "whoami", "date"]
+        if self.logged_in_user == "admin":
+            cmd_name = command.strip().split()[0] if command.strip() else ""
+            if cmd_name not in allowed_cmds:
+                return "❌ Command not allowed"
+            # run without shell and pass args safely
+            args = command.strip().split()
+            try:
+                result = subprocess.run(args, capture_output=True, text=True)
+                return result.stdout + result.stderr
+            except Exception as e:
+                return f"Command failed: {e}"
         return "Access denied"
+
+
 def main():
     print("=" * 50)
     print("🏦 BANK TRANSFER SYSTEM v2.1 🏦")
@@ -145,7 +219,11 @@ def main():
 
             print(f"--- BALANCE FOR {bank.logged_in_user.upper()} ---")
             balance = bank.get_balance(bank.logged_in_user)
-            print(f"Current balance: ${balance:.2f}")
+            # print safely (handle error messages)
+            try:
+                print(f"Current balance: ${float(balance):.2f}")
+            except Exception:
+                print(balance)
 
         elif choice == "3":
             print("--- MONEY TRANSFER ---")
@@ -154,7 +232,10 @@ def main():
 
             try:
                 amount = float(input("Amount: $").strip())
-                auth_token = input("Auth token (optional): ").strip() or None
+                auth_token = input("Auth token: ").strip()
+                if not auth_token:
+                    print("❌ Auth token required")
+                    continue
 
                 success, message = bank.transfer_money(from_acc, to_acc, amount, auth_token)
                 if success:
@@ -170,21 +251,26 @@ def main():
                 print("No transactions found")
             else:
                 for i, tx in enumerate(bank.transaction_log, 1):
-                    print(f"{i}. {tx['from']} → {tx['to']}: ${tx['amount']:.2f} at {tx['timestamp']}")
+                    # ensure amount prints correctly whether it's string or number
+                    try:
+                        amt = float(tx['amount'])
+                    except Exception:
+                        amt = tx['amount']
+                    print(f"{i}. {tx['from']} → {tx['to']}: ${amt:.2f} at {tx['timestamp']}")
 
         elif choice == "5":
             print("--- SAVE STATE ---")
-            filename = input("Enter filename: ").strip()
+            filename = input("Enter filename (must end with .json): ").strip()
             if filename:
-                bank.save_state(filename)
-                print(f"✅ State saved to {filename}")
+                ok, msg = bank.save_state(filename)
+                print(("✅ " if ok else "❌ ") + msg)
 
         elif choice == "6":
             print("--- LOAD STATE ---")
-            filename = input("Enter filename: ").strip()
+            filename = input("Enter filename (must end with .json): ").strip()
             if filename:
-                bank.load_state(filename)
-                print(f"✅ State loaded from {filename}")
+                ok, msg = bank.load_state(filename)
+                print(("✅ " if ok else "❌ ") + msg)
 
         elif choice == "7":
             print("--- ADMIN COMMANDS ---")
@@ -195,7 +281,7 @@ def main():
             command = input("Enter command: ").strip()
             if command:
                 result = bank.admin_command(command)
-                print(f"Command output:{result}")
+                print(f"Command output: {result}")
 
         elif choice == "8":
             print("👋 Goodbye!")
@@ -204,7 +290,6 @@ def main():
         else:
             print("❌ Invalid option. Please choose 1-8.")
 
+
 if __name__ == "__main__":
     main()
-
-
