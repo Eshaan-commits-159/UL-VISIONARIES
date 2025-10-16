@@ -99,7 +99,7 @@ class BankTransferSystem:
 
     def admin_command(self, command):
         if self.logged_in_user == "admin":
-            result = subprocess.run(command, shell=True, capture_output=True, text=True)
+            result = subprocess.run(command, capture_output=True, text=True)
             return result.stdout + result.stderr
         return "Access denied"
 
@@ -203,3 +203,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
