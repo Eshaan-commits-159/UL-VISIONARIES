@@ -1,3 +1,11 @@
+Here is the entire patched code for the Bank Transfer System, addressing the two actual vulnerabilities identified in the previous analysis:
+
+Insecure Balance Check: The get_balance method now requires a session token for authorization.
+
+Command Injection: The admin_command method is hardened with strict whitelisting and argument control to prevent injection.
+
+Python
+
 #!/usr/bin/env python3
 """
 Bank Transfer System
@@ -186,11 +194,20 @@ class BankTransferSystem:
 
         return True, "Transfer successful"
 
-    def get_balance(self, username):
-        if not self.check_session():
-            return "Please log in first"
+    # PATCHED METHOD: Requires auth_token validation
+    def get_balance(self, username, auth_token=None):
+        """Get balance of a user's account, requires a valid session token."""
+        # Check if a session exists AND if the provided token is valid
+        if not self._valid_session_token(auth_token):
+            return "Please log in with a valid session token"
+        
+        # Authorization check: must be the user themselves or an admin
         if self.logged_in_user != username and self.logged_in_user != "admin":
             return "Access denied"
+            
+        if username not in self.accounts:
+            return "Account not found"
+            
         return self.accounts[username]["balance"]
 
     # --- safer save/load with jsonschema ---
@@ -295,20 +312,53 @@ class BankTransferSystem:
         self.transaction_log = data["transactions"]
         return True, f"State loaded from {path}"
 
-    # --- safe admin command ---
+    # PATCHED METHOD: Hardened against Command Injection
     def admin_command(self, command):
-        allowed_cmds = {"ls", "whoami", "date"}
+        """Executes a strictly whitelisted command for admin only."""
+        allowed_cmds = {"ls", "whoami", "date"} 
+        
         if not self.check_session() or self.logged_in_user != "admin":
             return "Access denied"
 
-        cmd_name = command.strip().split()[0] if command.strip() else ""
+        # Split the command into arguments (e.g., 'ls -l' -> ['ls', '-l'])
+        args = command.strip().split()
+        if not args:
+            return "❌ Empty command"
+            
+        cmd_name = args[0] # The base command is the first argument
+        
         if cmd_name not in allowed_cmds:
             return "❌ Command not allowed"
-
-        args = command.strip().split()
+            
+        # Specific argument handling for whitelisted commands
+        if cmd_name == "ls":
+            # For 'ls', specifically enforce listing only the DATA_DIR 
+            # and allow only the '-l' option.
+            if len(args) > 1 and args[1] not in ('-l', DATA_DIR):
+                 return "❌ 'ls' only allows the '-l' option for data directory listing."
+            
+            # Construct the safe command list explicitly
+            safe_args = [cmd_name]
+            if '-l' in args:
+                 safe_args.append('-l')
+            safe_args.append(DATA_DIR) # Force the command to operate on the data directory
+            args = safe_args
+        
+        elif cmd_name in {"whoami", "date"}:
+             # These commands must not have arguments
+             if len(args) > 1:
+                 return f"❌ '{cmd_name}' does not allow arguments"
+             args = [cmd_name] # Reset args to ensure no potential shell remnants are run
+        
         try:
-            result = subprocess.run(args, capture_output=True, text=True)
+            # subprocess.run with a list of arguments is the secure way to call external commands
+            # It avoids shell interpretation of the arguments.
+            result = subprocess.run(args, capture_output=True, text=True, check=True)
             return result.stdout + result.stderr
+        except subprocess.CalledProcessError as e:
+            return f"Command failed with exit code {e.returncode}: {e.stderr}"
+        except FileNotFoundError:
+            return f"Command not found: {cmd_name}"
         except Exception as e:
             return f"Command failed: {e}"
 
@@ -316,7 +366,7 @@ class BankTransferSystem:
 # --- CLI Interface ---
 def main():
     print("=" * 50)
-    print("🏦 BANK TRANSFER SYSTEM v3.0 🏦")
+    print("🏦 BANK TRANSFER SYSTEM v3.1 (SECURED) 🏦")
     print("=" * 50)
 
     bank = BankTransferSystem()
@@ -345,10 +395,27 @@ def main():
                 print("❌ Invalid credentials")
 
         elif choice == "2":
-            balance = bank.get_balance(bank.logged_in_user)
+            # PATCHED: Now requires auth token
+            if not bank.logged_in_user:
+                print("❌ Please log in first.")
+                continue
+
+            auth_token = input("Auth token: ").strip()
+            if not auth_token:
+                print("❌ Auth token required")
+                continue
+                
+            # Pass auth_token to get_balance
+            balance = bank.get_balance(bank.logged_in_user, auth_token) 
+            
             try:
-                print(f"Current balance: ${float(balance):.2f}")
+                # Assuming success returns a Decimal, and failure returns a string
+                if isinstance(balance, Decimal):
+                    print(f"Current balance: ${float(balance):.2f}")
+                else:
+                    print(balance) # Print the error message
             except Exception:
+                # Catch case where get_balance returns a string error but is not caught by isinstance
                 print(balance)
 
         elif choice == "3":
@@ -364,7 +431,7 @@ def main():
                 success, message = bank.transfer_money(from_acc, to_acc, amount, auth_token)
                 print(("✅ " if success else "❌ ") + message)
             except ValueError:
-              print("❌ Invalid amount")
+                print("❌ Invalid amount")
 
         elif choice == "4":
             print("--- TRANSACTION LOG ---")
@@ -398,7 +465,7 @@ def main():
             command = input("Enter command: ").strip()
             if command:
                 result = bank.admin_command(command)
-                print(f"Command output: {result}")
+                print(f"Command output: \n{result}")
 
         elif choice == "8":
             print("👋 Goodbye!")
