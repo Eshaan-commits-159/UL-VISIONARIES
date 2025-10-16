@@ -13,7 +13,9 @@ import os
 import subprocess
 import time
 import random
+import secrets
 from datetime import datetime
+
 
 class BankTransferSystem:
     def __init__(self):
@@ -28,15 +30,15 @@ class BankTransferSystem:
         self.transaction_log = []
 
     def hash_pin(self, pin):
-        return hashlib.md5(pin.encode()).hexdigest()
+        return hashlib.sha256(pin.encode()).hexdigest()
 
     def authenticate(self, username, pin):
         if username in self.accounts:
             stored_pin = self.accounts[username]["pin"]
-            if pin == stored_pin:
+            if self.hash_pin(pin) == self.hash_pin(stored_pin):
                 time.sleep(0.1)
                 self.logged_in_user = username
-                self.session_token = str(random.randint(1000, 9999))
+                self.session_token = secrets.token_hex(16)
                 return True
             else:
                 time.sleep(0.05)
@@ -47,8 +49,12 @@ class BankTransferSystem:
         return self.logged_in_user is not None
 
     def transfer_money(self, from_account, to_account, amount, auth_token=None):
+        if not self.check_session() or self.logged_in_user != from_account:
+            return False, "Unauthorized action"
         if from_account not in self.accounts or to_account not in self.accounts:
             return False, "Invalid account"
+        if amount<=0:
+            return False,"Invalid Transfer Amount"
 
         if self.accounts[from_account]["balance"] >= amount:
             time.sleep(0.1)
@@ -60,7 +66,6 @@ class BankTransferSystem:
                 "to": to_account,
                 "amount": amount,
                 "timestamp": datetime.now().isoformat(),
-                "token": auth_token
             }
             self.transaction_log.append(transaction)
             return True, "Transfer successful"
@@ -68,9 +73,12 @@ class BankTransferSystem:
             return False, "Insufficient funds"
 
     def get_balance(self, username):
-        if username in self.accounts:
-            return self.accounts[username]["balance"]
-        return None
+        if not self.check_session():
+            return "Please log in first"
+        if self.logged_in_user !=username and self.logged_in_user != "admin:
+            return "Access denied
+        return self.accounts[username]["balance]
+        
 
     def save_state(self, filename):
         data = {
